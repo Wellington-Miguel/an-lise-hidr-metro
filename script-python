@@ -1,0 +1,105 @@
+import pandas as pd
+import os
+from google.colab import files
+from zipfile import ZipFile
+
+# Upload do arquivo ZIP com os CSVs diários
+uploaded = files.upload()
+zip_filename = list(uploaded.keys())[0]
+
+# Extrair os arquivos do ZIP
+with ZipFile(zip_filename, 'r') as zip_ref:
+    zip_ref.extractall("dados_csv")
+
+# Listar arquivos CSV extraídos
+caminho_pasta = "dados_csv"
+arquivos_csv = [f for f in os.listdir(caminho_pasta) if f.endswith('.CSV')]
+
+# Lista para armazenar os resumos diários
+resumos = []
+
+for arquivo in arquivos_csv:
+    try:
+        df = pd.read_csv(os.path.join(caminho_pasta, arquivo), encoding='ISO-8859-1')
+        if df.empty:
+            print(f"Aviso: O arquivo '{arquivo}' está vazio e será ignorado.")
+            continue
+
+        df_filtrado = df.iloc[:, [0, 1, 2, 5]].copy()
+        df_filtrado.columns = ['id', 'data', 'hora', 'vazao_total']
+        df_filtrado['vazao_total'] = pd.to_numeric(df_filtrado['vazao_total'], errors='coerce')
+
+        vazao_primeira = df_filtrado['vazao_total'].iloc[0]
+        vazao_ultima = df_filtrado['vazao_total'].iloc[-1]
+        vazao_diaria = vazao_ultima - vazao_primeira
+
+        dif_vazao = df_filtrado['vazao_total'].diff().fillna(0)
+        bombeamentos = (dif_vazao > 0).sum()
+        tempo_total_horas = (bombeamentos * 15) / 60
+
+        vazao_outorgada = 9600
+        porcentagem_consumo = round((vazao_diaria / vazao_outorgada) * 100, 2) if vazao_outorgada > 0 else 0
+        data_resumo = df_filtrado['data'].iloc[0]
+        hora_final = df_filtrado['hora'].iloc[-1]
+        vazao_total_final = vazao_ultima
+
+        resumos.append({
+            'data': data_resumo,
+            'hora_final': hora_final,
+            'vazao_total_final': vazao_total_final,
+            'vazao_diaria': vazao_diaria,
+            'tempo_total_bombeamento_horas': tempo_total_horas,
+            'vazao_outorgada': vazao_outorgada,
+            'porcentagem_consumo_vazao': porcentagem_consumo
+        })
+    except Exception as e:
+        print(f"Erro ao processar o arquivo '{arquivo}': {e}. Ignorando.")
+
+# Criar DataFrame final a partir dos resumos
+df_final = pd.DataFrame(resumos)
+
+# Converter coluna 'data' para datetime para poder ordenar corretamente
+df_final['data'] = pd.to_datetime(df_final['data'], errors='coerce', dayfirst=True)
+
+# Ordenar por data crescente
+df_final = df_final.sort_values(by='data')
+
+# Formatar a coluna 'data' para exibir apenas a data
+df_final['data'] = df_final['data'].dt.strftime('%d/%m/%Y')
+
+# Adicionar linha de total mensal
+totais = {
+    'data': 'TOTAL MENSAL',
+    'hora_final': '',
+    'vazao_total_final': '',
+    'vazao_diaria': df_final['vazao_diaria'].sum(),
+    'tempo_total_bombeamento_horas': df_final['tempo_total_bombeamento_horas'].sum(),
+    'vazao_outorgada': df_final['vazao_outorgada'].sum(),
+    'porcentagem_consumo_vazao': ''
+}
+df_total = pd.DataFrame([totais])
+df_final = pd.concat([df_final, df_total], ignore_index=True)
+
+
+# >>>>> MODIFICAÇÃO PARA MELHOR VISUALIZAÇÃO <<<<<
+# Criar um dicionário para renomear as colunas
+nomes_visuais = {
+    'data': 'Data',
+    'hora_final': 'Hora Final Leitura',
+    'vazao_total_final': 'Vazão Acumulada Final',
+    'vazao_diaria': 'Consumo Diário (m³)',
+    'tempo_total_bombeamento_horas': 'Tempo de Bombeamento (h)',
+    'vazao_outorgada': 'Outorga Diária (m³)',
+    'porcentagem_consumo_vazao': '% Consumido da Outorga'
+}
+df_final_formatado = df_final.rename(columns=nomes_visuais)
+
+
+# Salvar como arquivo Excel (.xlsx) usando o DataFrame com os nomes formatados
+arquivo_excel = "resumo_mensal.xlsx"
+df_final_formatado.to_excel(arquivo_excel, index=False)
+
+
+# Download do arquivo Excel
+print(f"\nResumo mensal gerado com sucesso! Baixando '{arquivo_excel}'...")
+files.download(arquivo_excel)
